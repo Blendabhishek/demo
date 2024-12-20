@@ -6,121 +6,118 @@
 # Step 5: fetch_file_content(): Fetches the content of the changed files using the GitHub API, decodes them from base64, and prints the first 200 characters for preview.
 
 
+import os
 import requests
 import base64
+from sentence_transformers import SentenceTransformer
+import chromadb
 
 # GitHub API settings
-# GITHUB_TOKEN = "your_personal_access_token"
-# REPO_OWNER = "Blendabhishek"
-# REPO_NAME = "demo"
-# BRANCH_NAME = "main"  # Or "master" if you're using that
+GITHUB_TOKEN = "Your API TOKEN "
+REPO_OWNER = "Repo Name"  # e.g., "octocat"
+REPO_NAME = "demo"    # e.g., "Hello-World"
+BRANCH_NAME = "master"  # Or "master" if you're using that
+HASH_FILE = os.path.join(os.path.dirname(__file__), "previous_commit_hash.txt")
 
-headers = {
-    "Authorization": f"token {GITHUB_TOKEN}",
-    "Accept": "application/vnd.github.v3+json"
-}
+# Initialize ChromaDB client and embedding model
+client = chromadb.Client()
+collection = client.get_or_create_collection("file_vectors")
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Step 1: Fetch the Latest Commit Hash from the main branch
-def get_latest_commit_hash():
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/commits/{BRANCH_NAME}"
-    response = requests.get(url, headers=headers)
-    
-    # Check if the response was successful
-    if response.status_code == 200:
-        data = response.json()
-        
-        # Check if the response is a dictionary (not a list) and contains the commit info
-        if isinstance(data, dict) and "sha" in data:
-            return data["sha"]
-        else:
-            print(f"Unexpected response format: {data}")
-            return None
-    else:
-        print(f"Failed to get latest commit hash: {response.status_code}")
-        print(response.json())  # Print the response to help with debugging
-        return None
-
-# Step 2: Fetch the Previous Commit Hash (to compare with the latest one)
-def get_previous_commit_hash(latest_commit_hash):
-    # You can use the commits endpoint to get the previous commit
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/commits?sha={BRANCH_NAME}&per_page=2"
-    response = requests.get(url, headers=headers)
-    
-    if response.status_code == 200:
-        data = response.json()
-        if len(data) > 1:
-            return data[1]["sha"]
-    else:
-        print(f"Failed to get previous commit hash: {response.status_code}")
-        print(response.json())
+# Helper function to read the last processed commit hash
+def read_previous_hash():
+    if os.path.exists(HASH_FILE):
+        with open(HASH_FILE, "r") as f:
+            return f.read().strip()
     return None
 
-# Step 3: Compare the commits (check if they are different)
-def compare_commits(latest_commit_hash, previous_commit_hash):
-    if latest_commit_hash != previous_commit_hash:
-        print(f"Changes detected between {previous_commit_hash} and {latest_commit_hash}")
-        return True
-    else:
-        print("No changes detected.")
-        return False
+# Helper function to store the latest processed commit hash
+def write_previous_hash(commit_hash):
+    with open(HASH_FILE, "w") as f:
+        f.write(commit_hash)
 
-# Step 4: Fetch the Changed Files
-def get_changed_files(latest_commit_hash, previous_commit_hash):
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/compare/{previous_commit_hash}...{latest_commit_hash}"
-    response = requests.get(url, headers=headers)
-    
+# Function to fetch the latest commit hash from GitHub
+def get_latest_commit_hash():
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/commits"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    params = {"sha": BRANCH_NAME, "per_page": 1}
+    response = requests.get(url, headers=headers, params=params)
     if response.status_code == 200:
         data = response.json()
-        return data.get("files", [])
+        if len(data) > 0:
+            return data[0]["sha"]
     else:
-        print(f"Failed to compare commits: {response.status_code}")
-        print(response.json())
-    return []
+        print(f"Failed to fetch latest commit hash: {response.status_code}")
+    return None
 
-# Step 5: Fetch the Content of Changed Files
-def fetch_file_content(file_name):
-    content_url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/{file_name}"
-    content_response = requests.get(content_url, headers=headers)
-    
-    if content_response.status_code == 200:
-        file_data = content_response.json()
-        file_content = base64.b64decode(file_data['content']).decode('utf-8')
-        return file_content
+# Function to fetch changes between two commits
+def get_commit_diff(base_commit, head_commit):
+    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/compare/{base_commit}...{head_commit}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json()
     else:
-        print(f"Failed to fetch content for {file_name}. Status Code: {content_response.status_code}")
-        return None
+        print(f"Failed to fetch commit diff: {response.status_code}")
+    return None
 
-# Step 6: Main Function to Run the Workflow
-def sync_with_github():
-    # Fetch the latest commit hash
-    latest_commit_hash = get_latest_commit_hash()
-    if latest_commit_hash is None:
-        return
+# Function to process changed files
+def process_changes(changed_files):
+    for file in changed_files:
+        file_name = file["filename"]
+        file_status = file["status"]
+        if file_status in ["added", "modified"]:
+            print(f"Processing file: {file_name} (Status: {file_status})")
+            content_url = file["contents_url"]
+            headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+            response = requests.get(content_url, headers=headers)
+            if response.status_code == 200:
+                file_content = response.json().get("content", "")
+                file_content_decoded = base64.b64decode(file_content).decode("utf-8")
+                print(f"Content of {file_name}:\n{file_content_decoded}")
 
-    # Fetch the previous commit hash
-    previous_commit_hash = get_previous_commit_hash(latest_commit_hash)
-    if previous_commit_hash is None:
-        return
-
-    # Compare the commits
-    if compare_commits(latest_commit_hash, previous_commit_hash):
-        # Get the changed files
-        changed_files = get_changed_files(latest_commit_hash, previous_commit_hash)
-        
-        if changed_files:
-            for file in changed_files:
-                file_name = file.get("filename")
-                status = file.get("status")  # added, modified, removed
-                print(f"Processing file: {file_name} (Status: {status})")
-                
-                # Fetch the content of the changed file
-                file_content = fetch_file_content(file_name)
-                if file_content:
-                    print(f"Content of {file_name}:")
-                    print(file_content[:200])  # Print the first 200 characters as a sample
-                else:
-                    print(f"Could not fetch content for {file_name}")
+                # Generate embeddings and upsert to ChromaDB
+                embedding = model.encode(file_content_decoded)
+                collection.add(
+                    documents=[file_content_decoded],
+                    metadatas=[{"file_name": file_name}],
+                    ids=[file_name],
+                    embeddings=[embedding],
+                )
+                print(f"File {file_name} upserted to vector DB.")
+            else:
+                print(f"Failed to fetch content for {file_name}.")
         else:
-            print("No files changed.")
+            print(f"Skipping file: {file_name} (Status: {file_status})")
+
+# Main function to sync changes
+def sync_with_vector_db():
+    previous_commit_hash = read_previous_hash()
+    latest_commit_hash = get_latest_commit_hash()
+
+    if not latest_commit_hash:
+        print("Could not fetch the latest commit hash. Exiting...")
+        return
+
+    if not previous_commit_hash:
+        print(f"Initial run detected. Setting commit hash to {latest_commit_hash}.")
+        write_previous_hash(latest_commit_hash)
+        return
+
+    if previous_commit_hash == latest_commit_hash:
+        print("No new changes detected. Exiting...")
+        return
+
+    print(f"Changes detected between {previous_commit_hash} and {latest_commit_hash}.")
+    diff = get_commit_diff(previous_commit_hash, latest_commit_hash)
+
+    if diff and "files" in diff:
+        changed_files = diff["files"]
+        process_changes(changed_files)
+        write_previous_hash(latest_commit_hash)
     else:
-        print("No changes detected between commits.")
+        print("No file changes detected.")
+
+# Run the sync process
+if __name__ == "__main__":
+    sync_with_vector_db()
