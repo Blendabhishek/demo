@@ -1,26 +1,15 @@
 import os
 import requests
 import datetime
-import uuid
 import warnings
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
 from azure.search.documents.indexes import SearchIndexClient
-from azure.search.documents.indexes._generated.models import VectorSearchAlgorithmKind
-from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
+
 from azure.search.documents.indexes.models import *
-# from azure.search.documents.indexes.models import (
-#     SearchIndex,
-#     SimpleField,
-#     SearchableField,
-#     SearchField,
-#     VectorSearch,
-#     VectorSearchAlgorithmConfiguration,
-#     VectorSearchProfile
-# )
 from langchain_community.embeddings import AzureOpenAIEmbeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 warnings.filterwarnings("ignore")
 
@@ -130,6 +119,13 @@ class GitHubCommitDeltaIndexer:
             print(f"Error creating/updating index: {e}")
             print(f"Error type: {type(e)}")
             print(f"Error details: {str(e)}")
+
+    def _format_datetime(self, datetime_obj):
+        """Helper function to format datetime to the expected string format for Azure"""
+        if datetime_obj:
+            return datetime_obj.isoformat(timespec="seconds") + "Z"
+        return None
+
 
     def search_similar_changes(self, query_text: str, top: int = 5) -> List[Dict]:
         """Search for similar changes using vector similarity."""
@@ -243,7 +239,7 @@ class GitHubCommitDeltaIndexer:
                 "status": delta_info['status'],
                 "additions": delta_info['additions'],
                 "deletions": delta_info['deletions'],
-                "timestamp": datetime.datetime.now().isoformat(),
+                "timestamp": self._format_datetime(datetime.datetime.now()),
                 "content_vector": vector_embedding
             }
 
